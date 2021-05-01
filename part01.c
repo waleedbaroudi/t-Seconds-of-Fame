@@ -8,9 +8,12 @@
 pthread_t *commentators;
 pthread_t moderator;
 int N = 0;
+int Q = 0;
+int T = 0;
+double P = 0;
 
 pthread_mutex_t mutex;
-pthread_cond_t condition_variable;
+pthread_cond_t condition_variable; // todo: how many do we need?
 
 void createThreads(void *(func)(void* vargp), void *(mod_func)(void* vargp));
 void *sayHello();
@@ -24,19 +27,21 @@ int main(int argc, char *argv[]){
   //           Or, alternatively:
   //                   gcc -o [output name] [file name].c -lpthread
   
-  // Command signiture: part1 -n [number of threads] -p [question probability] -q [number of questions]
+  // Command signiture: part1 -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time]
 
   pthread_mutex_init(&mutex, NULL);
   pthread_cond_init(&condition_variable, NULL);
   
-  char* inputNumberOfCommentators = argv[2];
-  N = (*inputNumberOfCommentators) -'0';
+  char* inputN = argv[2];
+  N = atoi(inputN);
   commentators = (pthread_t *) calloc(N, sizeof(pthread_t));
-  char* questionProbability = argv[4];
-  char* numberOfQuestions = argv[6];  
+  char* inputP = argv[4];
+  P = atof(inputP);
+  char* inputQ = argv[6];
+  Q = atoi(inputQ);
+  char* inputT = argv[8];
+  T = atoi(inputT);
 
-
-  
   doStuff(N);
 
   // Wait for the threads to complete.
