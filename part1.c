@@ -89,16 +89,9 @@ void doStuff(){
     createThreads(com_function, mod_function); 
 }
 
-  // pthread_mutex_lock(&mutex);
-  // cnt++;
-  // printf("Com Hello, cnt is: %d\n", cnt);
-  // if (cnt == 4)
-  // {
-  //     pthread_cond_signal(&condition_variable);
-  // }
-  // pthread_mutex_unlock(&mutex);
+
 int coms_entered = 0;
-int can_request = 0;
+int can_request = 0; //todo: replace with current com number.
 int can_speak = -1;
 
 void *com_function(void *slf){
@@ -116,9 +109,9 @@ void *com_function(void *slf){
       sem_post(&precedence_sem);
     }
     // printf("COM %d waiting to can_request..\n", self);
-    while (!can_request)
+    while (!can_request) // check current number instead
     {
-      pthread_cond_wait(&com_conds[self], &request_mutex); /// todo: mutex?
+      pthread_cond_wait(&com_conds[self], &request_mutex); /// todo: replace with single cond. signal it with broadcast.
     }
     // printf("COM GOT com_conds SIGNAL\n");
     // printf("COM %d requesting..\n", self);
@@ -132,6 +125,7 @@ void *com_function(void *slf){
     while (can_speak != self)
     {
      pthread_cond_wait(&com_conds[self], &request_mutex); /// todo: mutex???
+     printf("COM %d SIGNALLED\n", self);
     }
 
     int time = (rand() % T) + 1;
@@ -220,7 +214,7 @@ void *mod_function(){
         pthread_mutex_lock(&request_mutex);
         can_speak = requests[i];
         printf("MODERATOR GOT REQ MUTEX TO LET COM %d SPEAK\n", can_speak);
-        pthread_cond_signal(&com_conds[can_speak-1]); // TODO:                                                             CONTINUE HERE
+        pthread_cond_signal(&com_conds[1]); // TODO:                                                             CONTINUE HERE
         pthread_mutex_unlock(&request_mutex);
 
         // printf("MODERATOR WANTS MOD MUTEX TO WAIT FOR SPEAKER\n");
