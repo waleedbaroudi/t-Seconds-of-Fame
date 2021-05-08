@@ -17,7 +17,7 @@ int Q = 0;
 int T = 0;
 double P = 0;
 
-pthread_cond_t *com_conds;
+pthread_cond_t com_cond;
 pthread_cond_t mod_cond;
 pthread_mutex_t request_mutex;
 pthread_mutex_t mod_mutex;
@@ -59,7 +59,6 @@ int main(int argc, char *argv[]){
 
   requests = (int *) calloc(N, sizeof(int));
   commentators = (pthread_t *) calloc(N, sizeof(pthread_t));
-  com_conds = (pthread_cond_t *) calloc(N, sizeof(pthread_cond_t));
 
   pthread_mutex_init(&request_mutex, NULL);
   pthread_mutex_init(&mod_mutex, NULL);
@@ -79,7 +78,6 @@ int main(int argc, char *argv[]){
   // free allocated memory
   free(requests);
   free(commentators);
-  free(com_conds);
 
   
   return 0;
@@ -89,16 +87,9 @@ void doStuff(){
     createThreads(com_function, mod_function); 
 }
 
-  // pthread_mutex_lock(&mutex);
-  // cnt++;
-  // printf("Com Hello, cnt is: %d\n", cnt);
-  // if (cnt == 4)
-  // {
-  //     pthread_cond_signal(&condition_variable);
-  // }
-  // pthread_mutex_unlock(&mutex);
+
 int coms_entered = 0;
-int can_request = 0;
+int can_request = 0; //todo: replace with current com number.
 int can_speak = -1;
 
 void *com_function(void *slf){
@@ -108,7 +99,7 @@ void *com_function(void *slf){
   for(i=0; i < Q; i++) {
     // printf("COM WANTS REQ MUTEX TO can_request COMMENT/NO COMMENT\n");
     pthread_mutex_lock(&request_mutex);
-    // printf("COM GOT REQ MUTEX TO can_request, WAITING com_conds SIGNAL FROM MOD\n");
+    // printf("COM GOT REQ MUTEX TO can_request, WAITING com_cond SIGNAL FROM MOD\n");
     coms_entered++;
     // printf("COMS ENTERED: %d\n", coms_entered);
     if (coms_entered == N)
@@ -116,11 +107,11 @@ void *com_function(void *slf){
       sem_post(&precedence_sem);
     }
     // printf("COM %d waiting to can_request..\n", self);
-    while (!can_request)
+    while (!can_request) // check current number instead
     {
-      pthread_cond_wait(&com_conds[self], &request_mutex); /// todo: mutex?
+      pthread_cond_wait(&com_cond, &request_mutex); /// todo: replace with single cond. signal it with broadcast.
     }
-    // printf("COM GOT com_conds SIGNAL\n");
+    // printf("COM GOT com_cond SIGNAL\n");
     // printf("COM %d requesting..\n", self);
     if(!requestComment(self)) {
       printf("COM %d WON'T SPEAK, CONTINUE..\n", self);
@@ -131,7 +122,8 @@ void *com_function(void *slf){
     // printf("COM %d waiting to can_speak..\n", self);
     while (can_speak != self)
     {
-     pthread_cond_wait(&com_conds[self], &request_mutex); /// todo: mutex???
+     pthread_cond_wait(&com_cond, &request_mutex); /// todo: mutex???
+     printf("COM %d SIGNALLED\n", self);
     }
 
     int time = (rand() % T) + 1;
@@ -220,7 +212,7 @@ void *mod_function(){
         pthread_mutex_lock(&request_mutex);
         can_speak = requests[i];
         printf("MODERATOR GOT REQ MUTEX TO LET COM %d SPEAK\n", can_speak);
-        pthread_cond_signal(&com_conds[can_speak-1]); // TODO:                                                             CONTINUE HERE
+        pthread_cond_broadcast(&com_cond); // TODO:                                                             CONTINUE HERE
         pthread_mutex_unlock(&request_mutex);
 
         // printf("MODERATOR WANTS MOD MUTEX TO WAIT FOR SPEAKER\n");
@@ -244,7 +236,7 @@ void signal_coms() {
   int i;
   for (i = 0; i < N; i++)
   {
-    pthread_cond_signal(&com_conds[i]);
+    pthread_cond_broadcast(&com_cond);
   }
 }
 
@@ -275,13 +267,7 @@ void createThreads(void *(com_func)(void* vargp), void *(mod_func)(void* vargp))
 
 void initialize_conds() {
     pthread_cond_init(&mod_cond, NULL);
-    int i;
-    for (i = 0; i < N; i++)
-    {
-      // printf("INITIALIZING COM COND %d\n", i);
-      pthread_cond_init(&com_conds[i], NULL);
-    }
-    
+    pthread_cond_init(&com_cond, NULL);
 }
 
 int willDoAction(double p){
