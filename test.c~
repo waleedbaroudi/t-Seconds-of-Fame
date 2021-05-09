@@ -1,0 +1,37 @@
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <ctype.h>
+#include <pthread.h>
+#include <time.h>
+#include <semaphore.h>
+#include <sys/time.h>
+
+int willDoAction(double p);
+
+int main(){
+  srand(time(0));
+  double p = 0.005;
+  int l = 100;
+  int sum = 0;
+
+  int rand = 0;
+  int i = 0;
+  while(sum == 0){
+    i++;
+    rand = willDoAction(p);
+    sum += rand;
+  }
+
+  printf("Sum is: %d\n", sum);
+  
+  return 0;
+}
+
+
+int willDoAction(double p){
+  int r = (rand() % 100) + 1;
+  printf("r = %d, pr = %f\n", r, p * 100);
+  return r <= (p * 100);
+}

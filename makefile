@@ -1,3 +1,3 @@
 flags  = -lpthread
 project2:
-	gcc -o p1 part1.c $(flags)
+	gcc -o seconds_of_fame seconds_of_fame.c $(flags)

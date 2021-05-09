@@ -22,6 +22,8 @@ int T = 0;
 double P = 0;
 double B = 0;
 
+time_t starting_time;
+
 pthread_cond_t com_cond;
 pthread_cond_t mod_cond;
 pthread_cond_t news_cond;
@@ -53,6 +55,7 @@ int willDoAction(double p);
 int requestComment(int com_number);
 int pthread_sleep (int seconds);
 int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,int seconds);
+char *formatted_current_time();
 
 int main(int argc, char *argv[]){
   srand(time(0));
@@ -88,6 +91,7 @@ int main(int argc, char *argv[]){
   initialize_conds();
   clear_requests(); // initialize can_request to -1
 
+  starting_time = time(0);
   createThreads(com_function, mod_function, news_function); 
 
   while (1)
@@ -159,25 +163,26 @@ void *com_function(void *slf){
     } while (!can_request[self - 1]);
 
     if(!requestComment(self)) {
-      printf("Com %d did not request to speak, continue..\n", self);
+      printf("%s Commentator %d did not request to speak, continue..\n", formatted_current_time(), self);
       
       pthread_mutex_unlock(&request_mutex);
       continue;
     }
     while (can_speak != self)
     {
-     pthread_cond_wait(&com_cond, &request_mutex); /// todo: mutex???
+     pthread_cond_wait(&com_cond, &request_mutex);
     }
 
     int time = (rand() % T) + 1;
-    printf("Commentator #%d's turn to speak for %d seconds.\n", self, time);
+    printf("%s Commentator #%d's turn to speak for %d seconds.\n", formatted_current_time(), self, time);
     int speaking_state = timed_wait(&com_cond, &request_mutex, time);
     if(speaking_state == 110) { // SPEAK (SLEEP)
-      printf("Commentator #%d finished speaking.\n", self);
+      printf("%s Commentator #%d finished speaking.\n", formatted_current_time(), self);
     } else if(speaking_state == 0) {
-      printf("Commentator #%d was cut short due to breaking news.\n", self);
+      printf("%s Commentator #%d was cut short due to breaking news.\n", formatted_current_time(), self);
     } else {
-      /// TODO: handle sleeping error
+      printf("[FATAL] Thread sleep error, exitting..\n");
+      exit(1);
     }
 
     
@@ -208,7 +213,7 @@ int requestComment(int com_number) {
         if (willDoAction(P)) {
           requests[i] = com_number;
           result = 1;
-          printf("Commentator #%d generates an answer, position in queue: %d\n", com_number, queue_position);
+          printf("%s Commentator #%d generates an answer, position in queue: %d\n", formatted_current_time(), com_number, queue_position);
         } else {
           requests[i] = 0;
         }
@@ -233,7 +238,7 @@ void *mod_function(){
   int i;
   for(i=0; i < Q; i++) {
     sem_wait(&precedence_sem);
-    printf("Moderator asked Question %d\n", i+1);
+    printf("%s Moderator asked Question %d\n", formatted_current_time(), i+1);
     pthread_mutex_lock(&request_mutex);
     signal_coms();
     pthread_mutex_unlock(&request_mutex);
@@ -243,8 +248,6 @@ void *mod_function(){
       pthread_cond_wait(&mod_cond, &mod_mutex);
     } while (in_breaking_news);
 
-    print_requests_queue();
-    
     pthread_mutex_unlock(&mod_mutex); // change unlock place (if needed)
 
     int i;
@@ -254,7 +257,7 @@ void *mod_function(){
       int current_com = requests[i];
       if (i == N - 1)
       { // last speaker
-        clear_requests(); // todo: maybe place in critical section
+        clear_requests();
       }
       
       if (current_com == 0) { // this commentator does not wish to speak, skip to the next.
@@ -264,7 +267,7 @@ void *mod_function(){
       can_speak = current_com;
       if (i == N - 1)
       { // last speaker
-        recreate_sem(); // todo: maybe place in critical section
+        recreate_sem();
       }
       pthread_cond_broadcast(&com_cond);
       pthread_mutex_unlock(&request_mutex);
@@ -275,10 +278,10 @@ void *mod_function(){
       can_speak = -1;
       pthread_mutex_unlock(&mod_mutex); // change unlock place (if needed)
     }
-    printf("\n"); /// todo: remove?
+    printf("\n");
   }
   pthread_mutex_lock(&news_mutex);
-  debate_in_progress = 0; // TODO: Put in critical section
+  debate_in_progress = 0;
   pthread_mutex_unlock(&news_mutex);
 
   pthread_exit(NULL);
@@ -316,9 +319,9 @@ void *news_function() {
       pthread_mutex_unlock(&news_mutex);
       break;
     }
-    printf("BREAKING NEWS STARTED..\n");
+    printf("%s Breaking news!\n", formatted_current_time());
     pthread_sleep(BREAKING_NEWS_PERIOD);
-    printf("BREAKING NEWS FINISHED.\n");
+    printf("%s Breaking news ends.\n", formatted_current_time());
     in_breaking_news = 0;
     pthread_cond_signal(&news_cond);
     pthread_mutex_unlock(&news_mutex);
@@ -347,15 +350,14 @@ void initialize_conds() {
 }
 
 int willDoAction(double p){
-  // printf("calling willDoAction with p=%f\n", p);
-  int r = rand() % 101;
-  return r < (p * 100 + 1);
+  int r = rand() % 100;
+  return (r <= (p * 100)) && (p != 0);
 }
 
 void recreate_sem() {
   // re-initialize precedence sem to 1
   sem_destroy(&precedence_sem);
-  sem_init(&precedence_sem, 0, 0); // todo: fix value?
+  sem_init(&precedence_sem, 0, 0);
 }
 
 void clear_requests() {
@@ -407,10 +409,6 @@ int pthread_sleep (int seconds)
    pthread_cond_destroy(&conditionvar);
 
    //Upon successful completion, a value of zero shall be returned
-  //  if (res != 0)
-  //  {
-  //     printf("SLEEP FAILED WITH CODE: %d\n", res);
-  //  }
    
    return res;
 
@@ -422,9 +420,26 @@ int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,int seconds)
    struct timespec timetoexpire;
 
    struct timeval tp;
-   //When to expire is an absolute time, so get the current time and add //it to our delay time
    gettimeofday(&tp, NULL);
    timetoexpire.tv_sec = tp.tv_sec + seconds; timetoexpire.tv_nsec = tp.tv_usec * 1000;
    int res =  pthread_cond_timedwait(cond, mutex, &timetoexpire);
    return res;
+}
+
+char *formatted_current_time() {
+  int current_time = time(0) - starting_time;
+
+  int seconds = current_time % 60;
+  int minutes = current_time / 60;
+
+  char formattted_time[8];
+
+  sprintf(formattted_time,
+          "[%s%d:%s%d]",
+          (minutes < 10 ? "0" : ""),
+          minutes,
+          (seconds < 10 ? "0" : ""),
+          seconds);
+
+  return strcat(formattted_time, "");
 }
