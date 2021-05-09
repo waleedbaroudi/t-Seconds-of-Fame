@@ -8,28 +8,40 @@
 #include <semaphore.h>
 #include <sys/time.h>
 
+#define BREAKING_NEWS_CHECK 1
+#define BREAKING_NEWS_PERIOD 5
+
 pthread_t moderator;
 pthread_t *commentators;
+pthread_t breaking_news;
 
 int *requests; // comment can_request (reqyests[i]: commentator i can_request to asnwer. -1: no comment)
 int N = 0;
 int Q = 0;
 int T = 0;
 double P = 0;
+double B = 0;
 
 pthread_cond_t com_cond;
 pthread_cond_t mod_cond;
+pthread_cond_t news_cond;
+
 pthread_mutex_t request_mutex;
 pthread_mutex_t mod_mutex;
+pthread_mutex_t news_mutex;
+
 sem_t precedence_sem;
 
 int coms_entered = 0;
 int *can_request;
 int can_speak = -1;
+int in_breaking_news = 0;
+int debate_in_progress = 1;
 
-void createThreads(void *(func)(void* vargp), void *(mod_func)(void* vargp));
+void createThreads(void *(func)(void* vargp), void *(mod_func)(void* vargp), void *(news_func)(void* vargp));
 void *mod_function();
 void *com_function(void *slf);
+void *news_function();
 void doStuff();
 void recreate_sem();
 void clear_requests();
@@ -48,7 +60,7 @@ int main(int argc, char *argv[]){
   //           Or, alternatively:
   //                   gcc -o [output name] [file name].c -lpthread
   
-  // Command signiture: part1 -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time]
+  // Command signiture: part1 -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time] -b [probability of brekaing news]
 
   char* inputN = argv[2];
   N = atoi(inputN);
@@ -58,6 +70,8 @@ int main(int argc, char *argv[]){
   Q = atoi(inputQ);
   char* inputT = argv[8];
   T = atoi(inputT);
+  char* inputB = argv[10];
+  B = atof(inputB);
 
   sem_init(&precedence_sem, 0, 0);
 
@@ -67,11 +81,31 @@ int main(int argc, char *argv[]){
 
   pthread_mutex_init(&request_mutex, NULL);
   pthread_mutex_init(&mod_mutex, NULL);
+  pthread_mutex_init(&news_mutex, NULL);
+
   initialize_conds();
   clear_requests(); // initialize can_request to -1
 
-  doStuff();
+  createThreads(com_function, mod_function, news_function); 
 
+  while (debate_in_progress)
+  {
+    if (willDoAction(B))
+    {
+      pthread_mutex_lock(&news_mutex);
+      in_breaking_news = 1;
+      pthread_cond_signal(&news_cond);
+      while (in_breaking_news)
+      {
+        pthread_cond_wait(&news_cond, &news_mutex);
+      }
+      pthread_mutex_unlock(&news_mutex);
+      
+      /// TODO: implement breaking news case
+    }
+    pthread_sleep(BREAKING_NEWS_CHECK);
+  }
+  
   // Wait for the threads to complete.
   int i;
   for (i = 0; i < N; i++)
@@ -79,6 +113,7 @@ int main(int argc, char *argv[]){
     pthread_join(commentators[i], NULL);
   }
   pthread_join(moderator, NULL);
+  pthread_join(breaking_news, NULL);
 
   // free allocated memory
   free(requests);
@@ -87,11 +122,6 @@ int main(int argc, char *argv[]){
   
   return 0;
 }
-
-void doStuff(){
-    createThreads(com_function, mod_function); 
-}
-
 
 void *com_function(void *slf){
   int self = *((int *) slf);
@@ -198,7 +228,11 @@ void *mod_function(){
     // printf("MODERATOR WANTS MOD MUTEX TO WAIT FOR REQUESTS\n");
     pthread_mutex_lock(&mod_mutex);
     // printf("MODERATOR GOT MOD MUTEX TO WAIT, WAITING..\n");
-    pthread_cond_wait(&mod_cond, &mod_mutex);
+    do
+    {
+      pthread_cond_wait(&mod_cond, &mod_mutex);
+    } while (in_breaking_news);
+
     print_requests_queue();
     
     pthread_mutex_unlock(&mod_mutex); // change unlock place (if needed)
@@ -227,7 +261,10 @@ void *mod_function(){
       // printf("MODERATOR WANTS MOD MUTEX TO WAIT FOR SPEAKER\n");
       pthread_mutex_lock(&mod_mutex);
       // printf("MODERATOR GOT MOD MUTEX TO WAIT, WAITING..\n");
-      pthread_cond_wait(&mod_cond, &mod_mutex);
+      do {
+        pthread_cond_wait(&mod_cond, &mod_mutex);
+      } while (in_breaking_news);
+
       can_speak = -1;
       // printf("MODERATOR WOKE UP, COMS FINISHED SPEAKING\n\n");
       pthread_mutex_unlock(&mod_mutex); // change unlock place (if needed)
@@ -259,7 +296,30 @@ void notifyModerator() {
     pthread_mutex_unlock(&mod_mutex);
 }
 
-void createThreads(void *(com_func)(void* vargp), void *(mod_func)(void* vargp)){
+void *news_function() {
+  while (debate_in_progress)
+  {
+    pthread_mutex_lock(&news_mutex);
+    while (!in_breaking_news)
+    {
+      pthread_cond_wait(&news_cond, &news_mutex);
+    }
+    if (!debate_in_progress) // for when the program is over
+    {
+      pthread_mutex_unlock(&news_mutex);
+      break;
+    }
+    printf("BREAKING NEWS STARTED..\n");
+    pthread_sleep(5);
+    printf("BREAKING NEWS FINISHED.\n");
+    in_breaking_news = 0;
+    pthread_cond_signal(&news_cond);
+    pthread_mutex_unlock(&news_mutex);
+  }
+  pthread_exit(NULL);
+}
+
+void createThreads(void *(com_func)(void* vargp), void *(mod_func)(void* vargp), void *(news_func)(void* vargp)){
   int i;
   for (i = 0; i < N; i++)
   {
@@ -270,11 +330,13 @@ void createThreads(void *(com_func)(void* vargp), void *(mod_func)(void* vargp))
   }
   // create moderator threads
   pthread_create(&moderator, NULL, mod_func, NULL); 
+  pthread_create(&breaking_news, NULL, news_func, NULL); 
 }
 
 void initialize_conds() {
     pthread_cond_init(&mod_cond, NULL);
     pthread_cond_init(&com_cond, NULL);
+    pthread_cond_init(&news_cond, NULL);
 }
 
 int willDoAction(double p){
