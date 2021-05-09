@@ -52,6 +52,7 @@ void print_requests_queue();
 int willDoAction(double p);
 int requestComment(int com_number);
 int pthread_sleep (int seconds);
+int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,int seconds);
 
 int main(int argc, char *argv[]){
   srand(time(0));
@@ -60,7 +61,8 @@ int main(int argc, char *argv[]){
   //           Or, alternatively:
   //                   gcc -o [output name] [file name].c -lpthread
   
-  // Command signiture: part1 -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time] -b [probability of brekaing news]
+  // Command signiture: ./<bin name> -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time] -b [probability of brekaing news]
+  // Sample Command: ./<bin name> -n 4 -p 0.5 -q 4 -t 5 -b 0.2
 
   char* inputN = argv[2];
   N = atoi(inputN);
@@ -88,23 +90,39 @@ int main(int argc, char *argv[]){
 
   createThreads(com_function, mod_function, news_function); 
 
-  while (debate_in_progress)
+  while (1)
   {
+    pthread_sleep(BREAKING_NEWS_CHECK);
+    pthread_mutex_lock(&news_mutex);
+    if (!debate_in_progress){
+      pthread_mutex_unlock(&news_mutex);
+      break;
+    }
+    
     if (willDoAction(B))
     {
-      pthread_mutex_lock(&news_mutex);
       in_breaking_news = 1;
+
+      pthread_mutex_lock(&request_mutex);
+      pthread_cond_broadcast(&com_cond); // stop the current speaker
+      pthread_mutex_unlock(&request_mutex);
+
       pthread_cond_signal(&news_cond);
       while (in_breaking_news)
       {
         pthread_cond_wait(&news_cond, &news_mutex);
       }
-      pthread_mutex_unlock(&news_mutex);
-      
-      /// TODO: implement breaking news case
+
+      pthread_mutex_lock(&mod_mutex);
+      pthread_cond_signal(&mod_cond); // notify mod: end of breaking news
+      pthread_mutex_unlock(&mod_mutex);
     }
-    pthread_sleep(BREAKING_NEWS_CHECK);
+    pthread_mutex_unlock(&news_mutex);
   }
+  // notify news thread: end of debate
+  pthread_mutex_lock(&news_mutex);
+  pthread_cond_signal(&news_cond);
+  pthread_mutex_unlock(&news_mutex);
   
   // Wait for the threads to complete.
   int i;
@@ -128,32 +146,24 @@ void *com_function(void *slf){
   free(slf);
   int i;
   for(i=0; i < Q; i++) {
-    // printf("COM WANTS REQ MUTEX TO can_request COMMENT/NO COMMENT\n");
     pthread_mutex_lock(&request_mutex);
-    // printf("COM GOT REQ MUTEX TO can_request, WAITING com_cond SIGNAL FROM MOD\n");
     coms_entered++;
-    // printf("COMS ENTERED: %d\n", coms_entered);
     if (coms_entered == N)
     { // allow the moderator in after the last commentator enters
       coms_entered = 0;
       sem_post(&precedence_sem);
     }
-    // printf("COM %d waiting to can_request..\n", self);
     do
     {
       pthread_cond_wait(&com_cond, &request_mutex);
     } while (!can_request[self - 1]);
 
-    // printf("COM GOT com_cond SIGNAL\n");
-    // printf("COM %d requesting..\n", self);
     if(!requestComment(self)) {
-      printf("Com %d did not request to answer, continue..\n", self);
+      printf("Com %d did not request to speak, continue..\n", self);
       
       pthread_mutex_unlock(&request_mutex);
       continue;
     }
-    // printf("COM WAITING SPEAK SIGNAL FROM MOD\n");
-    // printf("COM %d waiting to can_speak..\n", self);
     while (can_speak != self)
     {
      pthread_cond_wait(&com_cond, &request_mutex); /// todo: mutex???
@@ -161,15 +171,18 @@ void *com_function(void *slf){
 
     int time = (rand() % T) + 1;
     printf("Commentator #%d's turn to speak for %d seconds.\n", self, time);
-    if(pthread_sleep(time) != 0) { // SPEAK (SLEEP)
-      /// TODO: Handle sleep error here
+    int speaking_state = timed_wait(&com_cond, &request_mutex, time);
+    if(speaking_state == 110) { // SPEAK (SLEEP)
+      printf("Commentator #%d finished speaking.\n", self);
+    } else if(speaking_state == 0) {
+      printf("Commentator #%d was cut short due to breaking news.\n", self);
+    } else {
+      /// TODO: handle sleeping error
     }
 
-    printf("Commentator #%d finished speaking.\n", self);
+    
 
-    // printf("COM WANTS MOD MUTEX TO SIGNAL MOD: FINISHED SPEAKING\n");
     pthread_mutex_lock(&mod_mutex);
-    // printf("COM GOT MOD MUTEX, SIGNALLING MOD..\n");
     pthread_cond_signal(&mod_cond);
     pthread_mutex_unlock(&mod_mutex);
 
@@ -222,12 +235,9 @@ void *mod_function(){
     sem_wait(&precedence_sem);
     printf("Moderator asked Question %d\n", i+1);
     pthread_mutex_lock(&request_mutex);
-    // printf("MODERATOR GOT REQ MUTEX TO LET COM can_request COMMENT/NO COMMENT\n");
     signal_coms();
     pthread_mutex_unlock(&request_mutex);
-    // printf("MODERATOR WANTS MOD MUTEX TO WAIT FOR REQUESTS\n");
     pthread_mutex_lock(&mod_mutex);
-    // printf("MODERATOR GOT MOD MUTEX TO WAIT, WAITING..\n");
     do
     {
       pthread_cond_wait(&mod_cond, &mod_mutex);
@@ -258,19 +268,18 @@ void *mod_function(){
       }
       pthread_cond_broadcast(&com_cond);
       pthread_mutex_unlock(&request_mutex);
-      // printf("MODERATOR WANTS MOD MUTEX TO WAIT FOR SPEAKER\n");
       pthread_mutex_lock(&mod_mutex);
-      // printf("MODERATOR GOT MOD MUTEX TO WAIT, WAITING..\n");
       do {
         pthread_cond_wait(&mod_cond, &mod_mutex);
       } while (in_breaking_news);
-
       can_speak = -1;
-      // printf("MODERATOR WOKE UP, COMS FINISHED SPEAKING\n\n");
       pthread_mutex_unlock(&mod_mutex); // change unlock place (if needed)
     }
     printf("\n"); /// todo: remove?
   }
+  pthread_mutex_lock(&news_mutex);
+  debate_in_progress = 0; // TODO: Put in critical section
+  pthread_mutex_unlock(&news_mutex);
 
   pthread_exit(NULL);
 }
@@ -289,9 +298,7 @@ void notifyModerator() {
     {
       return;
     }
-    // printf("COM WANTS MOD MUTEX TO SIGNAL MOD: FINISHED REQUESTING\n");
     pthread_mutex_lock(&mod_mutex);
-    // printf("COM GOT MOD MUTEX, SIGNALLING MOD..\n");
     pthread_cond_signal(&mod_cond);
     pthread_mutex_unlock(&mod_mutex);
 }
@@ -300,7 +307,7 @@ void *news_function() {
   while (debate_in_progress)
   {
     pthread_mutex_lock(&news_mutex);
-    while (!in_breaking_news)
+    while (!in_breaking_news && debate_in_progress)
     {
       pthread_cond_wait(&news_cond, &news_mutex);
     }
@@ -310,7 +317,7 @@ void *news_function() {
       break;
     }
     printf("BREAKING NEWS STARTED..\n");
-    pthread_sleep(5);
+    pthread_sleep(BREAKING_NEWS_PERIOD);
     printf("BREAKING NEWS FINISHED.\n");
     in_breaking_news = 0;
     pthread_cond_signal(&news_cond);
@@ -356,7 +363,6 @@ void clear_requests() {
   int i;
   for (int i = 0; i < N; i++)
   {
-    // printf("CLEARING can_request %d\n", i);
     requests[i] = -1;
     can_request[i] = 0;
   }
@@ -383,12 +389,10 @@ int pthread_sleep (int seconds)
    struct timespec timetoexpire;
    if(pthread_mutex_init(&mutex,NULL))
     {
-      printf("FAILED TO INIT SLEEP MUTEX\n");
       return -1;
     }
    if(pthread_cond_init(&conditionvar,NULL))
     {
-      printf("FAILED TO INIT SLEEP COND\n");
       return -1;
     }
    struct timeval tp;
@@ -410,4 +414,17 @@ int pthread_sleep (int seconds)
    
    return res;
 
+}
+
+
+int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,int seconds)
+{
+   struct timespec timetoexpire;
+
+   struct timeval tp;
+   //When to expire is an absolute time, so get the current time and add //it to our delay time
+   gettimeofday(&tp, NULL);
+   timetoexpire.tv_sec = tp.tv_sec + seconds; timetoexpire.tv_nsec = tp.tv_usec * 1000;
+   int res =  pthread_cond_timedwait(cond, mutex, &timetoexpire);
+   return res;
 }
