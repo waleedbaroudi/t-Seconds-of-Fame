@@ -10,6 +10,7 @@
 
 #define BREAKING_NEWS_CHECK 1
 #define BREAKING_NEWS_PERIOD 5
+#define USEC_CONVERSION_RATE 1000000
 
 pthread_t moderator;
 pthread_t *commentators;
@@ -22,7 +23,7 @@ int T = 0;
 double P = 0;
 double B = 0;
 
-time_t starting_time;
+struct timeval starting_time;
 
 pthread_cond_t com_cond;
 pthread_cond_t mod_cond;
@@ -53,19 +54,20 @@ void signal_coms();
 void print_requests_queue();
 int willDoAction(double p);
 int requestComment(int com_number);
-int pthread_sleep (int seconds);
-int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,int seconds);
+int pthread_sleep(double seconds);
+int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex, double seconds);
 char *formatted_current_time();
+double real_random_time(int max);
 
 int main(int argc, char *argv[]){
   srand(time(0));
-  // NOTE: This code should be run as follows:
-  //                   gcc -lpthread -o [file name].c [output name]
-  //           Or, alternatively:
-  //                   gcc -o [output name] [file name].c -lpthread
+  // // NOTE: This code should be run as follows:
+  // //                   gcc -lpthread -o [file name].c [output name]
+  // //           Or, alternatively:
+  // //                   gcc -o [output name] [file name].c -lpthread
   
-  // Command signiture: ./<bin name> -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time] -b [probability of brekaing news]
-  // Sample Command: ./<bin name> -n 4 -p 0.5 -q 4 -t 5 -b 0.2
+  // // Command signiture: ./<bin name> -n [number of threads] -p [question probability] -q [number of questions] -t [max speaking time] -b [probability of brekaing news]
+  // // Sample Command: ./<bin name> -n 4 -p 0.5 -q 4 -t 5 -b 0.2
 
   char* inputN = argv[2];
   N = atoi(inputN);
@@ -91,7 +93,7 @@ int main(int argc, char *argv[]){
   initialize_conds();
   clear_requests(); // initialize can_request to -1
 
-  starting_time = time(0);
+  gettimeofday(&starting_time, NULL);
   createThreads(com_function, mod_function, news_function); 
 
   while (1)
@@ -173,8 +175,9 @@ void *com_function(void *slf){
      pthread_cond_wait(&com_cond, &request_mutex);
     }
 
-    int time = (rand() % T) + 1;
-    printf("%s Commentator #%d's turn to speak for %d seconds.\n", formatted_current_time(), self, time);
+    double time = real_random_time(T);
+    printf("%s ", formatted_current_time());
+    printf("Commentator #%d's turn to speak for %.3f seconds.\n", self, time);
     int speaking_state = timed_wait(&com_cond, &request_mutex, time);
     if(speaking_state == 110) { // SPEAK (SLEEP)
       printf("%s Commentator #%d finished speaking.\n", formatted_current_time(), self);
@@ -384,62 +387,71 @@ void print_requests_queue() {
   original by Yingwu Zhu
   updated by Muhammed Nufail Farooqi
   *****************************************************************************/
-int pthread_sleep (int seconds)
-{
-   pthread_mutex_t mutex;
-   pthread_cond_t conditionvar;
-   struct timespec timetoexpire;
-   if(pthread_mutex_init(&mutex,NULL))
-    {
-      return -1;
+int pthread_sleep(double seconds){
+    pthread_mutex_t mutex;
+    pthread_cond_t conditionvar;
+    if(pthread_mutex_init(&mutex,NULL)){
+        return -1;
     }
-   if(pthread_cond_init(&conditionvar,NULL))
-    {
-      return -1;
+    if(pthread_cond_init(&conditionvar,NULL)){
+        return -1;
     }
-   struct timeval tp;
-   //When to expire is an absolute time, so get the current time and add //it to our delay time
-   gettimeofday(&tp, NULL);
-   timetoexpire.tv_sec = tp.tv_sec + seconds; timetoexpire.tv_nsec = tp.tv_usec * 1000;
 
-   pthread_mutex_lock (&mutex);
-   int res =  pthread_cond_timedwait(&conditionvar, &mutex, &timetoexpire);
-   pthread_mutex_unlock (&mutex);
-   pthread_mutex_destroy(&mutex);
-   pthread_cond_destroy(&conditionvar);
+    struct timeval tp;
+    struct timespec timetoexpire;
+    // When to expire is an absolute time, so get the current time and add
+    // it to our delay time
+    gettimeofday(&tp, NULL);
+    long new_nsec = tp.tv_usec * 1000 + (seconds - (long)seconds) * 1e9;
+    timetoexpire.tv_sec = tp.tv_sec + (long)seconds + (new_nsec / (long)1e9);
+    timetoexpire.tv_nsec = new_nsec % (long)1e9;
 
-   //Upon successful completion, a value of zero shall be returned
-   
-   return res;
+    pthread_mutex_lock(&mutex);
+    int res = pthread_cond_timedwait(&conditionvar, &mutex, &timetoexpire);
+    pthread_mutex_unlock(&mutex);
+    pthread_mutex_destroy(&mutex);
+    pthread_cond_destroy(&conditionvar);
 
+    //Upon successful completion, a value of zero shall be returned
+    return res;
 }
 
 
-int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,int seconds)
+int timed_wait (pthread_cond_t *cond, pthread_mutex_t *mutex,double seconds)
 {
-   struct timespec timetoexpire;
-
-   struct timeval tp;
-   gettimeofday(&tp, NULL);
-   timetoexpire.tv_sec = tp.tv_sec + seconds; timetoexpire.tv_nsec = tp.tv_usec * 1000;
-   int res =  pthread_cond_timedwait(cond, mutex, &timetoexpire);
-   return res;
+  struct timeval tp;
+  struct timespec timetoexpire;
+  gettimeofday(&tp, NULL);
+  long new_nsec = tp.tv_usec * 1000 + (seconds - (long)seconds) * 1e9;
+  timetoexpire.tv_sec = tp.tv_sec + (long)seconds + (new_nsec / (long)1e9);
+  timetoexpire.tv_nsec = new_nsec % (long)1e9;
+  int res =  pthread_cond_timedwait(cond, mutex, &timetoexpire);
+  return res;
 }
 
 char *formatted_current_time() {
-  int current_time = time(0) - starting_time;
+  struct timeval current;
+  gettimeofday(&current, NULL);
+  int current_time = (current.tv_sec - starting_time.tv_sec) * USEC_CONVERSION_RATE + current.tv_usec - starting_time.tv_usec;
+  int current_time_millis = (current_time / 1000) % 1000;
+  int seconds = (current_time / USEC_CONVERSION_RATE) % 60;
+  int minutes = (current_time / USEC_CONVERSION_RATE) / 60;
 
-  int seconds = current_time % 60;
-  int minutes = current_time / 60;
-
-  char formattted_time[8];
+  char formattted_time[16];
 
   sprintf(formattted_time,
-          "[%s%d:%s%d]",
-          (minutes < 10 ? "0" : ""),
+          "[%02d:%02d.%03d]",
           minutes,
-          (seconds < 10 ? "0" : ""),
-          seconds);
-
+          seconds,
+          current_time_millis);
   return strcat(formattted_time, "");
+}
+
+double real_random_time(int max) {
+  int rnd = rand();
+  int i_random = rnd % 1001;
+
+  double d_random = (double) (i_random / 1000.0) * (max - 1);
+
+  return d_random + 1;
 }
